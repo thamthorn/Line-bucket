@@ -24,6 +24,11 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 app = Flask(__name__)
 
+# Add a root route for health checks
+@app.route("/")
+def health_check():
+    return "LINE Bot is running!", 200
+
 @app.route("/callback", methods=["POST"])
 def callback():
     # Get X-Line-Signature header
@@ -69,4 +74,7 @@ def handle_file(event):
     print(f"Saved file to {file_path}")
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Get port from environment variable (Render sets this automatically)
+    port = int(os.environ.get("PORT", 5000))
+    # Bind to 0.0.0.0 to accept external connections
+    app.run(host="0.0.0.0", port=port, debug=False)
