@@ -275,14 +275,9 @@ def send_auth_request(user_id, reply_token):
     auth_url = f"{DOMAIN}/auth?user_id={user_id}"
     
     buttons_template = ButtonsTemplate(
-        title="Google Drive Authentication Required",
-        text="To save files to your Google Drive, please authenticate your account.",
-        actions=[
-            URIAction(
-                label="Connect to Drive",  # Updated to 15 characters
-                uri=auth_url
-            )
-        ]
+        title="Google Drive Authentication",  # 28 characters
+        text="Please authenticate to save.",  # 30 characters
+        actions=[URIAction(label="Connect to Drive", uri=auth_url)]
     )
     
     template_message = TemplateSendMessage(
