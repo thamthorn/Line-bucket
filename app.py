@@ -279,7 +279,7 @@ def send_auth_request(user_id, reply_token):
         text="To save files to your Google Drive, please authenticate your account.",
         actions=[
             URIAction(
-                label="🔐 Connect Google Drive",
+                label="Connect to Drive",  # Updated to 15 characters
                 uri=auth_url
             )
         ]
