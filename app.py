@@ -270,14 +270,35 @@ def is_user_authenticated(user_id):
     """Check if user has valid Google Drive access"""
     return get_user_token(user_id) is not None
 
+# def send_auth_request(user_id, reply_token):
+#     """Send authentication request to user"""
+#     auth_url = f"{DOMAIN}/auth?user_id={user_id}"
+    
+#     buttons_template = ButtonsTemplate(
+#         title="Google Drive Authentication",  # 28 characters
+#         text="Please authenticate to save.",  # 30 characters
+#         actions=[URIAction(label="Connect to Drive", uri=auth_url)]
+#     )
+    
+#     template_message = TemplateSendMessage(
+#         alt_text="Please authenticate with Google Drive",
+#         template=buttons_template
+#     )
+    
+#     line_bot_api.reply_message(reply_token, template_message)
+
 def send_auth_request(user_id, reply_token):
     """Send authentication request to user"""
-    auth_url = f"{DOMAIN}/auth?user_id={user_id}"
+    auth_url = f"{DOMAIN}/auth?user_id={user_id}&bot_prompt=aggressive"  # Add bot_prompt=aggressive
     
     buttons_template = ButtonsTemplate(
-        title="Google Drive Authentication",  # 28 characters
-        text="Please authenticate to save.",  # 30 characters
-        actions=[URIAction(label="Connect to Drive", uri=auth_url)]
+        text="Authenticate with Google Drive to save files.",  # 43 characters
+        actions=[
+            URIAction(
+                label="Connect to Drive",  # 15 characters
+                uri=auth_url
+            )
+        ]
     )
     
     template_message = TemplateSendMessage(
@@ -286,6 +307,8 @@ def send_auth_request(user_id, reply_token):
     )
     
     line_bot_api.reply_message(reply_token, template_message)
+
+
 
 # Initialize database on startup
 init_db()
