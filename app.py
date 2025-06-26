@@ -288,25 +288,22 @@ def is_user_authenticated(user_id):
 #     line_bot_api.reply_message(reply_token, template_message)
 
 def send_auth_request(user_id, reply_token):
-    """Send authentication request to user"""
-    auth_url = f"{DOMAIN}/auth?user_id={user_id}&bot_prompt=aggressive"  # Add bot_prompt=aggressive
+    """Send authentication request to user with browser-friendly link"""
+    auth_url = f"{DOMAIN}/auth?user_id={user_id}"
     
-    buttons_template = ButtonsTemplate(
-        text="Authenticate with Google Drive to save files.",  # 43 characters
-        actions=[
-            URIAction(
-                label="Connect to Drive",  # 15 characters
-                uri=auth_url
-            )
-        ]
+    # Send instructions with the link
+    instruction_message = TextSendMessage(
+        text=f"🔐 To save files to Google Drive, please authenticate:\n\n"
+             f"👆 Tap this link and follow the instructions:\n"
+             f"{auth_url}\n\n"
+             f"📱 If Google shows 'browser not supported':\n"
+             f"• Copy the link above\n"
+             f"• Open it in Chrome/Safari instead\n"
+             f"• Complete authentication\n"
+             f"• Return to LINE when done"
     )
     
-    template_message = TemplateSendMessage(
-        alt_text="Please authenticate with Google Drive",
-        template=buttons_template
-    )
-    
-    line_bot_api.reply_message(reply_token, template_message)
+    line_bot_api.reply_message(reply_token, instruction_message)
 
 
 
@@ -320,11 +317,283 @@ def health_check():
 
 @app.route("/auth")
 def auth():
-    """Start OAuth flow"""
+    """Start OAuth flow with smart browser detection"""
     user_id = request.args.get('user_id')
     if not user_id:
         return "Missing user ID", 400
     
+    # Check if this is coming from LINE browser or similar webview
+    user_agent = request.headers.get('User-Agent', '')
+    is_webview_browser = any(indicator in user_agent for indicator in [
+        'Line', 'NAVER', 'WebView', 'wv)', 'Instagram', 'FBAV', 'FB_IAB'
+    ])
+    
+    if is_webview_browser:
+        # Show instructions to open in external browser
+        return render_template_string("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Open in External Browser</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta charset="UTF-8">
+            <style>
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                }
+                body { 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
+                    padding: 20px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .container { 
+                    background: white;
+                    padding: 30px;
+                    border-radius: 15px;
+                    max-width: 420px;
+                    width: 100%;
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                    text-align: center;
+                }
+                .icon {
+                    font-size: 48px;
+                    margin-bottom: 20px;
+                }
+                .title {
+                    color: #333;
+                    font-size: 24px;
+                    font-weight: 600;
+                    margin-bottom: 15px;
+                }
+                .warning { 
+                    color: #e74c3c; 
+                    font-size: 16px; 
+                    margin-bottom: 25px;
+                    background: #fff5f5;
+                    padding: 15px;
+                    border-radius: 8px;
+                    border-left: 4px solid #e74c3c;
+                }
+                .instructions { 
+                    color: #555; 
+                    margin-bottom: 25px;
+                    text-align: left;
+                    line-height: 1.6;
+                }
+                .step {
+                    display: flex;
+                    align-items: center;
+                    margin: 12px 0;
+                    padding: 12px;
+                    background: #f8f9ff;
+                    border-radius: 8px;
+                    border-left: 3px solid #667eea;
+                }
+                .step-number {
+                    background: #667eea;
+                    color: white;
+                    width: 24px;
+                    height: 24px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-weight: bold;
+                    font-size: 12px;
+                    margin-right: 12px;
+                    flex-shrink: 0;
+                }
+                .url-box {
+                    background: #f8f9fa;
+                    padding: 15px;
+                    border-radius: 8px;
+                    border: 2px dashed #667eea;
+                    margin: 20px 0;
+                    word-break: break-all;
+                    font-family: 'Courier New', monospace;
+                    font-size: 14px;
+                    color: #333;
+                    position: relative;
+                }
+                .copy-btn {
+                    background: linear-gradient(135deg, #667eea, #764ba2);
+                    color: white;
+                    padding: 12px 24px;
+                    border: none;
+                    border-radius: 25px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    font-weight: 600;
+                    margin: 15px 0;
+                    transition: all 0.3s ease;
+                    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+                }
+                .copy-btn:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+                }
+                .copy-btn:active {
+                    transform: translateY(0);
+                }
+                .footer {
+                    margin-top: 25px;
+                    padding-top: 20px;
+                    border-top: 1px solid #eee;
+                    color: #888;
+                    font-size: 14px;
+                }
+                .success-message {
+                    display: none;
+                    background: #d4edda;
+                    color: #155724;
+                    padding: 10px;
+                    border-radius: 5px;
+                    margin: 10px 0;
+                    border: 1px solid #c3e6cb;
+                }
+                @media (max-width: 480px) {
+                    .container {
+                        padding: 20px;
+                        margin: 10px;
+                    }
+                    .title {
+                        font-size: 20px;
+                    }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">🔐</div>
+                <div class="title">Google Drive Authentication</div>
+                
+                <div class="warning">
+                    ⚠️ In-app browser detected! Google OAuth requires a regular browser.
+                </div>
+                
+                <div class="instructions">
+                    <div class="step">
+                        <div class="step-number">1</div>
+                        <div>Copy the authentication link below</div>
+                    </div>
+                    
+                    <div class="url-box" id="auth-url">{{ request.url_root }}start-auth?user_id={{ user_id }}</div>
+                    
+                    <button class="copy-btn" onclick="copyToClipboard()">
+                        📋 Copy Authentication Link
+                    </button>
+                    
+                    <div class="success-message" id="success-msg">
+                        ✅ Link copied! Now open your browser and paste it.
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">2</div>
+                        <div>Open Chrome, Safari, or your default browser</div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">3</div>
+                        <div>Paste and visit the copied link</div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">4</div>
+                        <div>Complete Google authentication</div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">5</div>
+                        <div>Return to LINE when authentication is complete</div>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    💡 This ensures secure authentication with Google Drive
+                </div>
+            </div>
+            
+            <script>
+                async function copyToClipboard() {
+                    const url = document.getElementById('auth-url').textContent;
+                    const button = document.querySelector('.copy-btn');
+                    const successMsg = document.getElementById('success-msg');
+                    
+                    try {
+                        // Try modern clipboard API first
+                        if (navigator.clipboard && window.isSecureContext) {
+                            await navigator.clipboard.writeText(url);
+                            showSuccess();
+                        } else {
+                            // Fallback for older browsers or non-HTTPS
+                            const textArea = document.createElement('textarea');
+                            textArea.value = url;
+                            textArea.style.position = 'fixed';
+                            textArea.style.left = '-999999px';
+                            textArea.style.top = '-999999px';
+                            document.body.appendChild(textArea);
+                            textArea.focus();
+                            textArea.select();
+                            
+                            const successful = document.execCommand('copy');
+                            document.body.removeChild(textArea);
+                            
+                            if (successful) {
+                                showSuccess();
+                            } else {
+                                throw new Error('Copy command failed');
+                            }
+                        }
+                    } catch (err) {
+                        // If all else fails, select the text
+                        const range = document.createRange();
+                        range.selectNode(document.getElementById('auth-url'));
+                        window.getSelection().removeAllRanges();
+                        window.getSelection().addRange(range);
+                        
+                        button.innerHTML = '👆 Text selected - Copy manually';
+                        button.style.background = '#f39c12';
+                        
+                        setTimeout(() => {
+                            button.innerHTML = '📋 Copy Authentication Link';
+                            button.style.background = 'linear-gradient(135deg, #667eea, #764ba2)';
+                        }, 3000);
+                    }
+                    
+                    function showSuccess() {
+                        successMsg.style.display = 'block';
+                        button.innerHTML = '✅ Copied! Open your browser';
+                        button.style.background = '#27ae60';
+                        
+                        setTimeout(() => {
+                            button.innerHTML = '📋 Copy Authentication Link';
+                            button.style.background = 'linear-gradient(135deg, #667eea, #764ba2)';
+                            successMsg.style.display = 'none';
+                        }, 4000);
+                    }
+                }
+                
+                // Auto-select text on mobile for easier copying
+                document.getElementById('auth-url').addEventListener('click', function() {
+                    if (window.getSelection) {
+                        const range = document.createRange();
+                        range.selectNode(this);
+                        window.getSelection().removeAllRanges();
+                        window.getSelection().addRange(range);
+                    }
+                });
+            </script>
+        </body>
+        </html>
+        """, user_id=user_id)
+    
+    # If not a webview browser, proceed with normal OAuth flow
     # Store user_id in session
     session['user_id'] = user_id
     
@@ -341,6 +610,58 @@ def auth():
     session['state'] = state
     
     return redirect(authorization_url)
+
+
+# Add this new route for direct OAuth start (for external browsers)
+@app.route("/start-auth")
+def start_auth():
+    """Direct OAuth start - bypasses browser detection"""
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Error</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h2>❌ Error</h2>
+            <p>Missing user ID parameter</p>
+        </body>
+        </html>
+        """, 400
+    
+    # Store user_id in session
+    session['user_id'] = user_id
+    
+    try:
+        # Create OAuth flow
+        flow = get_oauth_flow()
+        
+        # Generate authorization URL
+        authorization_url, state = flow.authorization_url(
+            access_type='offline',
+            include_granted_scopes='true'
+        )
+        
+        # Store state in session
+        session['state'] = state
+        
+        return redirect(authorization_url)
+        
+    except Exception as e:
+        print(f"Error in start_auth: {e}")
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Authentication Error</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h2>❌ Authentication Error</h2>
+            <p>Failed to start authentication process</p>
+            <p>Please try again or contact support</p>
+            <p><small>Error: {str(e)}</small></p>
+        </body>
+        </html>
+        """, 500
+
 
 @app.route("/oauth/callback")
 def oauth_callback():
