@@ -270,22 +270,25 @@ def is_user_authenticated(user_id):
     """Check if user has valid Google Drive access"""
     return get_user_token(user_id) is not None
 
+
+
 # def send_auth_request(user_id, reply_token):
-#     """Send authentication request to user"""
+#     """Send authentication request to user with browser-friendly link"""
 #     auth_url = f"{DOMAIN}/auth?user_id={user_id}"
     
-#     buttons_template = ButtonsTemplate(
-#         title="Google Drive Authentication",  # 28 characters
-#         text="Please authenticate to save.",  # 30 characters
-#         actions=[URIAction(label="Connect to Drive", uri=auth_url)]
+#     # Send instructions with the link
+#     instruction_message = TextSendMessage(
+#         text=f"🔐 To save files to Google Drive, please authenticate:\n\n"
+#              f"👆 Tap this link and follow the instructions:\n"
+#              f"{auth_url}\n\n"
+#              f"📱 If Google shows 'browser not supported':\n"
+#              f"• Copy the link above\n"
+#              f"• Open it in Chrome/Safari instead\n"
+#              f"• Complete authentication\n"
+#              f"• Return to LINE when done"
 #     )
     
-#     template_message = TemplateSendMessage(
-#         alt_text="Please authenticate with Google Drive",
-#         template=buttons_template
-#     )
-    
-#     line_bot_api.reply_message(reply_token, template_message)
+#     line_bot_api.reply_message(reply_token, instruction_message)
 
 def send_auth_request(user_id, reply_token):
     """Send authentication request to user with browser-friendly link"""
@@ -303,9 +306,8 @@ def send_auth_request(user_id, reply_token):
              f"• Return to LINE when done"
     )
     
-    line_bot_api.reply_message(reply_token, instruction_message)
-
-
+    # Use push_message instead of reply_message to send privately
+    line_bot_api.push_message(user_id, instruction_message)
 
 # Initialize database on startup
 init_db()
@@ -764,25 +766,25 @@ def handle_image(event):
         result = upload_to_user_drive(user_id, image_data, filename, 'image/jpeg')
         
         if result:
-            # Send confirmation message back to user
+            # Send confirmation message privately to user
             reply_message = TextSendMessage(
                 text=f"✅ Image saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
             )
-            line_bot_api.reply_message(event.reply_token, reply_message)
+            line_bot_api.push_message(user_id, reply_message)  # Changed from reply_message
             print(f"Image uploaded successfully for user {user_id}: {result['name']}")
         else:
-            # Send error message - might need re-authentication
+            # Send error message privately
             reply_message = TextSendMessage(
                 text="❌ Failed to save image. You may need to re-authenticate with Google Drive."
             )
-            line_bot_api.reply_message(event.reply_token, reply_message)
+            line_bot_api.push_message(user_id, reply_message)  # Changed from reply_message
             # Remove invalid token
             delete_user_token(user_id)
             
     except Exception as e:
         print(f"Error handling image: {e}")
         reply_message = TextSendMessage(text="❌ Error processing image")
-        line_bot_api.reply_message(event.reply_token, reply_message)
+        line_bot_api.push_message(user_id, reply_message)  # Changed from reply_message
 
 @handler.add(MessageEvent, message=FileMessage)
 def handle_file(event):
@@ -828,25 +830,25 @@ def handle_file(event):
         result = upload_to_user_drive(user_id, file_data, timestamped_filename, mime_type)
         
         if result:
-            # Send confirmation message back to user
+            # Send confirmation message privately to user
             reply_message = TextSendMessage(
                 text=f"✅ File saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
             )
-            line_bot_api.reply_message(event.reply_token, reply_message)
+            line_bot_api.push_message(user_id, reply_message)  # Changed from reply_message
             print(f"File uploaded successfully for user {user_id}: {result['name']}")
         else:
-            # Send error message - might need re-authentication
+            # Send error message privately
             reply_message = TextSendMessage(
                 text="❌ Failed to save file. You may need to re-authenticate with Google Drive."
             )
-            line_bot_api.reply_message(event.reply_token, reply_message)
+            line_bot_api.push_message(user_id, reply_message)  # Changed from reply_message
             # Remove invalid token
             delete_user_token(user_id)
             
     except Exception as e:
         print(f"Error handling file: {e}")
         reply_message = TextSendMessage(text="❌ Error processing file")
-        line_bot_api.reply_message(event.reply_token, reply_message)
+        line_bot_api.push_message(user_id, reply_message)  # Changed from reply_message
 
 if __name__ == "__main__":
     # Get port from environment variable (Render sets this automatically)
