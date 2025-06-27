@@ -1,7 +1,7 @@
 from flask import Flask, request, abort, redirect, session, url_for, render_template_string
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, ImageMessage, FileMessage, TextSendMessage, TemplateSendMessage, ButtonsTemplate, URIAction, PostbackAction
+from linebot.models import MessageEvent, ImageMessage, FileMessage, TextSendMessage, TemplateSendMessage, ButtonsTemplate, URIAction, FlexSendMessage
 
 import os
 import io
@@ -270,42 +270,95 @@ def is_user_authenticated(user_id):
     """Check if user has valid Google Drive access"""
     return get_user_token(user_id) is not None
 
-# def send_auth_request(user_id, reply_token):
-#     """Send authentication request to user"""
-#     auth_url = f"{DOMAIN}/auth?user_id={user_id}"
-    
-#     buttons_template = ButtonsTemplate(
-#         title="Google Drive Authentication",  # 28 characters
-#         text="Please authenticate to save.",  # 30 characters
-#         actions=[URIAction(label="Connect to Drive", uri=auth_url)]
-#     )
-    
-#     template_message = TemplateSendMessage(
-#         alt_text="Please authenticate with Google Drive",
-#         template=buttons_template
-#     )
-    
-#     line_bot_api.reply_message(reply_token, template_message)
 
+
+
+def create_user_specific_flex_message(user_id, message_type, **kwargs):
+    """Create a flex message with user-specific content"""
+    if message_type == "auth":
+        auth_url = f"{DOMAIN}/auth?user_id={user_id}"
+        
+        flex_content = {
+            "type": "bubble",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "🔐 Authentication Required",
+                        "weight": "bold",
+                        "size": "lg"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Connect your Google Drive to save files",
+                        "size": "sm",
+                        "color": "#666666",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "uri",
+                            "label": "Connect Google Drive",
+                            "uri": auth_url
+                        },
+                        "style": "primary",
+                        "margin": "lg"
+                    }
+                ]
+            }
+        }
+        
+        return FlexSendMessage(alt_text="Authentication required", contents=flex_content)
+    
+    elif message_type == "file_saved":
+        file_name = kwargs.get('file_name')
+        file_url = kwargs.get('file_url')
+        
+        flex_content = {
+            "type": "bubble",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "✅ File Saved Successfully",
+                        "weight": "bold",
+                        "size": "lg",
+                        "color": "#4CAF50"
+                    },
+                    {
+                        "type": "text",
+                        "text": f"📁 {file_name}",
+                        "size": "sm",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "uri",
+                            "label": "View in Drive",
+                            "uri": file_url
+                        },
+                        "style": "secondary",
+                        "margin": "lg"
+                    }
+                ]
+            }
+        }
+        
+        return FlexSendMessage(alt_text="File saved to Google Drive", contents=flex_content)
+
+# Update your handlers to use flex messages
 def send_auth_request(user_id, reply_token):
-    """Send authentication request with postback button"""
-    buttons_template = ButtonsTemplate(
-        title="Authentication Required",
-        text="Tap to get your auth link",
-        actions=[
-            PostbackAction(
-                label="🔐 Get My Auth Link",
-                data=f"action=auth&user_id={user_id}"
-            )
-        ]
-    )
-    
-    template_message = TemplateSendMessage(
-        alt_text="Authentication required",
-        template=buttons_template
-    )
-    
-    line_bot_api.reply_message(reply_token, template_message)
+    """Send authentication request with flex message"""
+    flex_message = create_user_specific_flex_message(user_id, "auth")
+    line_bot_api.reply_message(reply_token, flex_message)
+
+
 
 
 
@@ -740,22 +793,6 @@ def callback():
 
     return "OK"
 
-
-# Add postback handler
-@handler.add(PostbackEvent)
-def handle_postback(event):
-    user_id = event.source.user_id
-    data = event.postback.data
-    
-    if data.startswith("action=auth") and f"user_id={user_id}" in data:
-        auth_url = f"{DOMAIN}/auth?user_id={user_id}"
-        
-        auth_message = TextSendMessage(
-            text=f"🔐 Your authentication link:\n{auth_url}\n\n"
-                 f"Complete authentication in your browser, then return to LINE."
-        )
-        line_bot_api.reply_message(event.reply_token, auth_message)
-
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     try:
@@ -782,11 +819,14 @@ def handle_image(event):
         result = upload_to_user_drive(user_id, image_data, filename, 'image/jpeg')
         
         if result:
-            # Send confirmation message back to user
-            reply_message = TextSendMessage(
-                text=f"✅ Image saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
+            # Send confirmation message with flex message
+            flex_message = create_user_specific_flex_message(
+                user_id, 
+                "file_saved", 
+                file_name=result['name'], 
+                file_url=result['url']
             )
-            line_bot_api.reply_message(event.reply_token, reply_message)
+            line_bot_api.reply_message(event.reply_token, flex_message)
             print(f"Image uploaded successfully for user {user_id}: {result['name']}")
         else:
             # Send error message - might need re-authentication
@@ -846,16 +886,19 @@ def handle_file(event):
         result = upload_to_user_drive(user_id, file_data, timestamped_filename, mime_type)
         
         if result:
-            # Send confirmation message back to user
-            reply_message = TextSendMessage(
-                text=f"✅ File saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
+            # Send confirmation message with flex message
+            flex_message = create_user_specific_flex_message(
+                user_id, 
+                "file_saved", 
+                file_name=result['name'], 
+                file_url=result['url']
             )
-            line_bot_api.reply_message(event.reply_token, reply_message)
+            line_bot_api.reply_message(event.reply_token, flex_message)
             print(f"File uploaded successfully for user {user_id}: {result['name']}")
         else:
             # Send error message - might need re-authentication
             reply_message = TextSendMessage(
-                text="❌ Failed to save file. You may need to re-authenticate with Google Drive."
+                text="❌ Failed to save file. You may need to re-authentication with Google Drive."
             )
             line_bot_api.reply_message(event.reply_token, reply_message)
             # Remove invalid token
