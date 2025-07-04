@@ -1,7 +1,7 @@
 from flask import Flask, request, abort, redirect, session, url_for, render_template_string
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, ImageMessage, FileMessage, TextSendMessage, TemplateSendMessage, ButtonsTemplate, URIAction
+from linebot.models import MessageEvent, ImageMessage, FileMessage, TextMessage, TextSendMessage, TemplateSendMessage, ButtonsTemplate, URIAction
 
 import os
 import io
@@ -67,6 +67,17 @@ def init_db():
                 expires_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create table for tracking group/room memberships
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS group_members (
+                group_id VARCHAR(255) NOT NULL,
+                user_id VARCHAR(255) NOT NULL,
+                group_type VARCHAR(20) NOT NULL,
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, user_id)
             )
         """)
         
@@ -161,6 +172,58 @@ def delete_user_token(user_id):
         
     except Exception as e:
         print(f"Error deleting user token: {e}")
+
+def track_group_member(group_id, user_id, group_type):
+    """Track a user's membership in a group/room"""
+    if not DATABASE_URL:
+        return  # Skip tracking if no database
+    
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        cur.execute("""
+            INSERT INTO group_members (group_id, user_id, group_type, last_active)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (group_id, user_id) 
+            DO UPDATE SET 
+                last_active = EXCLUDED.last_active
+        """, (group_id, user_id, group_type, datetime.now()))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+    except Exception as e:
+        print(f"Error tracking group member: {e}")
+
+def get_authenticated_group_members(group_id):
+    """Get all authenticated users in a specific group/room"""
+    if not DATABASE_URL:
+        return []  # Return empty if no database
+    
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        # Get all users in the group who are also authenticated
+        cur.execute("""
+            SELECT DISTINCT gm.user_id 
+            FROM group_members gm
+            INNER JOIN user_tokens ut ON gm.user_id = ut.user_id
+            WHERE gm.group_id = %s
+            AND gm.last_active > %s
+        """, (group_id, datetime.now() - timedelta(days=30)))  # Active within 30 days
+        
+        results = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return [row[0] for row in results]
+        
+    except Exception as e:
+        print(f"Error getting authenticated group members: {e}")
+        return []
 
 # In-memory storage fallback (for development or when database is not available)
 user_tokens = {}
@@ -270,6 +333,37 @@ def is_user_authenticated(user_id):
     """Check if user has valid Google Drive access"""
     return get_user_token(user_id) is not None
 
+def get_group_members(group_id):
+    """Get list of authenticated users in a group - simplified version"""
+    # In a real implementation, you would track group memberships
+    # For now, we'll use a simple approach where we check all users
+    # This is a placeholder - LINE Bot API doesn't directly provide group member lists
+    # You might need to track this separately when users join/leave groups
+    return []
+
+def get_authenticated_users_in_context(event):
+    """Get all authenticated users who should receive the file"""
+    source_type = event.source.type
+    sender_id = event.source.user_id
+    
+    if source_type == 'user':
+        # Private chat - only save to sender
+        return [sender_id] if is_user_authenticated(sender_id) else []
+    
+    elif source_type in ['group', 'room']:
+        # Group/room chat - save to all authenticated users in the group
+        group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+        
+        # Track the current sender in this group
+        track_group_member(group_id, sender_id, source_type)
+        
+        # Get all authenticated members of this group
+        authenticated_members = get_authenticated_group_members(group_id)
+        
+        return authenticated_members
+    
+    return []
+
 # def send_auth_request(user_id, reply_token):
 #     """Send authentication request to user"""
 #     auth_url = f"{DOMAIN}/auth?user_id={user_id}"
@@ -287,11 +381,11 @@ def is_user_authenticated(user_id):
     
 #     line_bot_api.reply_message(reply_token, template_message)
 
-def send_auth_request(user_id, reply_token):
+def send_auth_request(user_id, reply_token, source_type=None):
     """Send authentication request to user with browser-friendly link"""
     auth_url = f"{DOMAIN}/auth?user_id={user_id}"
     
-    # Send instructions with the link
+    # Send instructions with the link privately to the user
     instruction_message = TextSendMessage(
         text=f"🔐 To save files to Google Drive, please authenticate:\n\n"
              f"👆 Tap this link and follow the instructions:\n"
@@ -303,7 +397,15 @@ def send_auth_request(user_id, reply_token):
              f"• Return to LINE when done"
     )
     
-    line_bot_api.reply_message(reply_token, instruction_message)
+    # Send private message to user (not visible in group chat)
+    line_bot_api.push_message(user_id, instruction_message)
+    
+    # Send a brief acknowledgment in the group chat (if it's a group)
+    if source_type == 'group' or source_type == 'room':
+        group_reply = TextSendMessage(
+            text="📨 Authentication link sent to you privately. Please check your personal messages."
+        )
+        line_bot_api.reply_message(reply_token, group_reply)
 
 
 
@@ -743,10 +845,14 @@ def handle_image(event):
     try:
         user_id = event.source.user_id
         message_id = event.message.id
+        source_type = event.source.type  # 'user', 'group', or 'room'
         
-        # Check if user is authenticated
-        if not is_user_authenticated(user_id):
-            send_auth_request(user_id, event.reply_token)
+        # Get all authenticated users who should receive this file
+        target_users = get_authenticated_users_in_context(event)
+        
+        # If no one is authenticated, send auth request to sender
+        if not target_users:
+            send_auth_request(user_id, event.reply_token, source_type)
             return
         
         content = line_bot_api.get_message_content(message_id)
@@ -756,33 +862,79 @@ def handle_image(event):
         for chunk in content.iter_content():
             image_data += chunk
         
-        # Generate filename with timestamp
+        # Generate filename with timestamp and sender info
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"line_image_{timestamp}_{message_id}.jpg"
         
-        # Upload to user's Google Drive
-        result = upload_to_user_drive(user_id, image_data, filename, 'image/jpeg')
+        # Get sender's display name if possible (for better file naming)
+        try:
+            sender_profile = line_bot_api.get_profile(user_id)
+            sender_name = sender_profile.display_name.replace(' ', '_')[:20]  # Limit length and remove spaces
+        except:
+            sender_name = "user"
         
-        if result:
-            # Send confirmation message back to user
-            reply_message = TextSendMessage(
-                text=f"✅ Image saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
-            )
-            line_bot_api.reply_message(event.reply_token, reply_message)
-            print(f"Image uploaded successfully for user {user_id}: {result['name']}")
-        else:
-            # Send error message - might need re-authentication
-            reply_message = TextSendMessage(
-                text="❌ Failed to save image. You may need to re-authenticate with Google Drive."
-            )
-            line_bot_api.reply_message(event.reply_token, reply_message)
-            # Remove invalid token
-            delete_user_token(user_id)
+        filename = f"line_image_{timestamp}_{sender_name}_{message_id}.jpg"
+        
+        # Upload to each authenticated user's Google Drive
+        successful_uploads = []
+        failed_uploads = []
+        
+        for target_user_id in target_users:
+            result = upload_to_user_drive(target_user_id, image_data, filename, 'image/jpeg')
+            if result:
+                successful_uploads.append((target_user_id, result))
+                print(f"Image uploaded successfully for user {target_user_id}: {result['name']}")
+            else:
+                failed_uploads.append(target_user_id)
+                print(f"Failed to upload image for user {target_user_id}")
+        
+        # Send notifications
+        if successful_uploads:
+            # Notify each user privately about their copy
+            for target_user_id, result in successful_uploads:
+                if target_user_id == user_id:
+                    # Sender gets detailed info
+                    private_message = TextSendMessage(
+                        text=f"✅ Your image saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
+                    )
+                else:
+                    # Other group members get notification
+                    private_message = TextSendMessage(
+                        text=f"📸 Image from {sender_name} saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
+                    )
+                line_bot_api.push_message(target_user_id, private_message)
+            
+            # Send group acknowledgment
+            if source_type == 'group' or source_type == 'room':
+                group_reply = TextSendMessage(
+                    text=f"✅ Image saved to {len(successful_uploads)} Google Drive(s)!"
+                )
+                line_bot_api.reply_message(event.reply_token, group_reply)
+            else:
+                # In private chat, just reply normally
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ Image saved to your Google Drive!"))
+        
+        # Handle failed uploads
+        if failed_uploads:
+            for failed_user_id in failed_uploads:
+                error_message = TextSendMessage(
+                    text="❌ Failed to save image to your Google Drive. You may need to re-authenticate."
+                )
+                line_bot_api.push_message(failed_user_id, error_message)
+                # Remove invalid token
+                delete_user_token(failed_user_id)
             
     except Exception as e:
         print(f"Error handling image: {e}")
-        reply_message = TextSendMessage(text="❌ Error processing image")
-        line_bot_api.reply_message(event.reply_token, reply_message)
+        # Send error to sender
+        error_message = TextSendMessage(text="❌ Error processing image")
+        line_bot_api.push_message(user_id, error_message)
+        
+        # Send brief error in group/room (if applicable)
+        if source_type == 'group' or source_type == 'room':
+            group_reply = TextSendMessage(text="❌ Error processing image")
+            line_bot_api.reply_message(event.reply_token, group_reply)
+        else:
+            line_bot_api.reply_message(event.reply_token, error_message)
 
 @handler.add(MessageEvent, message=FileMessage)
 def handle_file(event):
@@ -790,10 +942,14 @@ def handle_file(event):
         user_id = event.source.user_id
         message_id = event.message.id
         file_name = event.message.file_name
+        source_type = event.source.type  # 'user', 'group', or 'room'
         
-        # Check if user is authenticated
-        if not is_user_authenticated(user_id):
-            send_auth_request(user_id, event.reply_token)
+        # Get all authenticated users who should receive this file
+        target_users = get_authenticated_users_in_context(event)
+        
+        # If no one is authenticated, send auth request to sender
+        if not target_users:
+            send_auth_request(user_id, event.reply_token, source_type)
             return
         
         content = line_bot_api.get_message_content(message_id)
@@ -816,37 +972,138 @@ def handle_file(event):
         elif file_name.lower().endswith(('.pptx', '.ppt')):
             mime_type = 'application/vnd.ms-powerpoint'
         
-        # Add timestamp to filename to avoid conflicts
+        # Get sender's display name if possible (for better file naming)
+        try:
+            sender_profile = line_bot_api.get_profile(user_id)
+            sender_name = sender_profile.display_name.replace(' ', '_')[:20]  # Limit length and remove spaces
+        except:
+            sender_name = "user"
+        
+        # Add timestamp and sender to filename to avoid conflicts
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         name_parts = file_name.rsplit('.', 1)
         if len(name_parts) == 2:
-            timestamped_filename = f"{name_parts[0]}_{timestamp}.{name_parts[1]}"
+            timestamped_filename = f"{name_parts[0]}_{timestamp}_{sender_name}.{name_parts[1]}"
         else:
-            timestamped_filename = f"{file_name}_{timestamp}"
+            timestamped_filename = f"{file_name}_{timestamp}_{sender_name}"
         
-        # Upload to user's Google Drive
-        result = upload_to_user_drive(user_id, file_data, timestamped_filename, mime_type)
+        # Upload to each authenticated user's Google Drive
+        successful_uploads = []
+        failed_uploads = []
         
-        if result:
-            # Send confirmation message back to user
-            reply_message = TextSendMessage(
-                text=f"✅ File saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
-            )
-            line_bot_api.reply_message(event.reply_token, reply_message)
-            print(f"File uploaded successfully for user {user_id}: {result['name']}")
-        else:
-            # Send error message - might need re-authentication
-            reply_message = TextSendMessage(
-                text="❌ Failed to save file. You may need to re-authenticate with Google Drive."
-            )
-            line_bot_api.reply_message(event.reply_token, reply_message)
-            # Remove invalid token
-            delete_user_token(user_id)
+        for target_user_id in target_users:
+            result = upload_to_user_drive(target_user_id, file_data, timestamped_filename, mime_type)
+            if result:
+                successful_uploads.append((target_user_id, result))
+                print(f"File uploaded successfully for user {target_user_id}: {result['name']}")
+            else:
+                failed_uploads.append(target_user_id)
+                print(f"Failed to upload file for user {target_user_id}")
+        
+        # Send notifications
+        if successful_uploads:
+            # Notify each user privately about their copy
+            for target_user_id, result in successful_uploads:
+                if target_user_id == user_id:
+                    # Sender gets detailed info
+                    private_message = TextSendMessage(
+                        text=f"✅ Your file saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
+                    )
+                else:
+                    # Other group members get notification
+                    private_message = TextSendMessage(
+                        text=f"📄 File from {sender_name} saved to your Google Drive!\n📁 File: {result['name']}\n🔗 View: {result['url']}"
+                    )
+                line_bot_api.push_message(target_user_id, private_message)
+            
+            # Send group acknowledgment
+            if source_type == 'group' or source_type == 'room':
+                group_reply = TextSendMessage(
+                    text=f"✅ File saved to {len(successful_uploads)} Google Drive(s)!"
+                )
+                line_bot_api.reply_message(event.reply_token, group_reply)
+            else:
+                # In private chat, just reply normally
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ File saved to your Google Drive!"))
+        
+        # Handle failed uploads
+        if failed_uploads:
+            for failed_user_id in failed_uploads:
+                error_message = TextSendMessage(
+                    text="❌ Failed to save file to your Google Drive. You may need to re-authenticate."
+                )
+                line_bot_api.push_message(failed_user_id, error_message)
+                # Remove invalid token
+                delete_user_token(failed_user_id)
             
     except Exception as e:
         print(f"Error handling file: {e}")
-        reply_message = TextSendMessage(text="❌ Error processing file")
-        line_bot_api.reply_message(event.reply_token, reply_message)
+        # Send error to sender
+        error_message = TextSendMessage(text="❌ Error processing file")
+        line_bot_api.push_message(user_id, error_message)
+        
+        # Send brief error in group/room (if applicable)
+        if source_type == 'group' or source_type == 'room':
+            group_reply = TextSendMessage(text="❌ Error processing file")
+            line_bot_api.reply_message(event.reply_token, group_reply)
+        else:
+            line_bot_api.reply_message(event.reply_token, error_message)
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_text_message(event):
+    """Handle text messages for commands"""
+    try:
+        user_id = event.source.user_id
+        text = event.message.text.lower().strip()
+        source_type = event.source.type
+        
+        # Track group membership when user interacts
+        if source_type in ['group', 'room']:
+            group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+            track_group_member(group_id, user_id, source_type)
+        
+        if text in ['/status', 'status', '/auth', 'auth']:
+            # Check authentication status
+            if is_user_authenticated(user_id):
+                status_message = TextSendMessage(
+                    text="✅ You are authenticated with Google Drive!\nYou can send images and files to save them to your Google Drive."
+                )
+            else:
+                status_message = TextSendMessage(
+                    text="❌ You are not authenticated with Google Drive.\nSend an image or file to start the authentication process."
+                )
+            
+            # Send status privately if in group/room
+            if source_type == 'group' or source_type == 'room':
+                line_bot_api.push_message(user_id, status_message)
+                group_reply = TextSendMessage(text="📊 Status sent to you privately.")
+                line_bot_api.reply_message(event.reply_token, group_reply)
+            else:
+                line_bot_api.reply_message(event.reply_token, status_message)
+                
+        elif text in ['/help', 'help', '/commands', 'commands']:
+            help_message = TextSendMessage(
+                text="🤖 LINE to Google Drive Bot Help\n\n"
+                     "📸 Send images → Saved to ALL authenticated members' Google Drive\n"
+                     "📄 Send files → Saved to ALL authenticated members' Google Drive\n"
+                     "/status → Check authentication status\n"
+                     "/help → Show this help message\n\n"
+                     "🔒 First time users need to authenticate with Google Drive.\n"
+                     "👥 In groups: Files are shared with all authenticated members!"
+            )
+            
+            # Send help privately if in group/room
+            if source_type == 'group' or source_type == 'room':
+                line_bot_api.push_message(user_id, help_message)
+                group_reply = TextSendMessage(text="📖 Help sent to you privately.")
+                line_bot_api.reply_message(event.reply_token, group_reply)
+            else:
+                line_bot_api.reply_message(event.reply_token, help_message)
+                
+        # Don't respond to other text messages to avoid spam
+        
+    except Exception as e:
+        print(f"Error handling text message: {e}")
 
 if __name__ == "__main__":
     # Get port from environment variable (Render sets this automatically)
