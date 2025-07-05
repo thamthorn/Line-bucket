@@ -128,7 +128,9 @@ def get_user_token(user_id):
     """Get user token from database"""
     if not DATABASE_URL:
         # Fallback to in-memory storage
-        return user_tokens.get(user_id)
+        token = user_tokens.get(user_id)
+        print(f"DEBUG: In-memory token for {user_id}: {'Found' if token else 'Not found'}")
+        return token
     
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -141,11 +143,14 @@ def get_user_token(user_id):
         conn.close()
         
         if result:
+            print(f"DEBUG: Database token for {user_id}: Found")
             return {
                 'access_token': result['access_token'],
                 'refresh_token': result['refresh_token'],
                 'expires_at': result['expires_at']
             }
+        else:
+            print(f"DEBUG: Database token for {user_id}: Not found")
         return None
         
     except Exception as e:
@@ -359,6 +364,11 @@ def get_authenticated_users_in_context(event):
         
         # Get all authenticated members of this group
         authenticated_members = get_authenticated_group_members(group_id)
+        
+        # IMPORTANT: Ensure the sender is included if they're authenticated
+        # This fixes the issue where a newly authenticated user isn't in the group_members table yet
+        if is_user_authenticated(sender_id) and sender_id not in authenticated_members:
+            authenticated_members.append(sender_id)
         
         return authenticated_members
     
@@ -783,12 +793,18 @@ def oauth_callback():
         credentials = flow.credentials
         
         # Store user tokens in database
+        # Google access tokens typically expire in 1 hour from issue time
+        # If the credentials object has expiry info, use it, otherwise default to 1 hour
+        expiry_time = credentials.expiry if hasattr(credentials, 'expiry') and credentials.expiry else (datetime.now() + timedelta(seconds=3600))
+        
         token_data = {
             'access_token': credentials.token,
             'refresh_token': credentials.refresh_token,
-            'expires_at': datetime.now() + timedelta(seconds=3600)  # Default 1 hour
+            'expires_at': expiry_time
         }
+        print(f"DEBUG: Storing token for user {user_id}")
         store_user_token(user_id, token_data)
+        print(f"DEBUG: Token stored, verification: {get_user_token(user_id) is not None}")
         
         # Clear session
         session.clear()
@@ -847,11 +863,17 @@ def handle_image(event):
         message_id = event.message.id
         source_type = event.source.type  # 'user', 'group', or 'room'
         
+        # Debug logging
+        print(f"Image received from user {user_id} in {source_type}")
+        print(f"User authenticated: {is_user_authenticated(user_id)}")
+        
         # Get all authenticated users who should receive this file
         target_users = get_authenticated_users_in_context(event)
+        print(f"Target users: {target_users}")
         
         # If no one is authenticated, send auth request to sender
         if not target_users:
+            print(f"No target users found, sending auth request to {user_id}")
             send_auth_request(user_id, event.reply_token, source_type)
             return
         
@@ -1104,6 +1126,20 @@ def handle_text_message(event):
         
     except Exception as e:
         print(f"Error handling text message: {e}")
+
+@app.route("/debug/user/<user_id>")
+def debug_user_auth(user_id):
+    """Debug route to check user authentication status"""
+    token = get_user_token(user_id)
+    is_auth = is_user_authenticated(user_id)
+    
+    return f"""
+    <h2>Debug Info for User: {user_id}</h2>
+    <p><strong>Has Token:</strong> {token is not None}</p>
+    <p><strong>Is Authenticated:</strong> {is_auth}</p>
+    <p><strong>Token Details:</strong> {token if token else 'None'}</p>
+    <p><strong>Current Time:</strong> {datetime.now()}</p>
+    """
 
 if __name__ == "__main__":
     # Get port from environment variable (Render sets this automatically)
