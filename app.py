@@ -181,7 +181,12 @@ def delete_user_token(user_id):
 def track_group_member(group_id, user_id, group_type):
     """Track a user's membership in a group/room"""
     if not DATABASE_URL:
-        return  # Skip tracking if no database
+        # Use in-memory storage
+        if group_id not in group_members_memory:
+            group_members_memory[group_id] = set()
+        group_members_memory[group_id].add(user_id)
+        print(f"DEBUG: In-memory group {group_id} now has members: {group_members_memory[group_id]}")
+        return
     
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -205,7 +210,16 @@ def track_group_member(group_id, user_id, group_type):
 def get_authenticated_group_members(group_id):
     """Get all authenticated users in a specific group/room"""
     if not DATABASE_URL:
-        return []  # Return empty if no database
+        # Use in-memory storage
+        if group_id not in group_members_memory:
+            print(f"DEBUG: Group {group_id} not found in memory")
+            return []
+        
+        # Get all members of this group who are also authenticated
+        group_members = group_members_memory[group_id]
+        authenticated_members = [user_id for user_id in group_members if is_user_authenticated(user_id)]
+        print(f"DEBUG: Group {group_id} members: {group_members}, authenticated: {authenticated_members}")
+        return authenticated_members
     
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -232,6 +246,7 @@ def get_authenticated_group_members(group_id):
 
 # In-memory storage fallback (for development or when database is not available)
 user_tokens = {}
+group_members_memory = {}  # Format: {group_id: set(user_ids)}
 
 # Google OAuth 2.0 configuration
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
@@ -351,25 +366,33 @@ def get_authenticated_users_in_context(event):
     source_type = event.source.type
     sender_id = event.source.user_id
     
+    print(f"DEBUG: Getting authenticated users for {source_type} from sender {sender_id}")
+    
     if source_type == 'user':
         # Private chat - only save to sender
-        return [sender_id] if is_user_authenticated(sender_id) else []
+        result = [sender_id] if is_user_authenticated(sender_id) else []
+        print(f"DEBUG: Private chat result: {result}")
+        return result
     
     elif source_type in ['group', 'room']:
         # Group/room chat - save to all authenticated users in the group
         group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+        print(f"DEBUG: Group/room ID: {group_id}")
         
         # Track the current sender in this group
         track_group_member(group_id, sender_id, source_type)
         
         # Get all authenticated members of this group
         authenticated_members = get_authenticated_group_members(group_id)
+        print(f"DEBUG: Authenticated members from database/memory: {authenticated_members}")
         
         # IMPORTANT: Ensure the sender is included if they're authenticated
         # This fixes the issue where a newly authenticated user isn't in the group_members table yet
         if is_user_authenticated(sender_id) and sender_id not in authenticated_members:
             authenticated_members.append(sender_id)
+            print(f"DEBUG: Added sender to authenticated members: {authenticated_members}")
         
+        print(f"DEBUG: Final authenticated members list: {authenticated_members}")
         return authenticated_members
     
     return []
