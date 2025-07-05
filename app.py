@@ -438,7 +438,11 @@ def send_auth_request(user_id, reply_token, source_type=None):
         group_reply = TextSendMessage(
             text="📨 Authentication link sent to you privately. Please check your personal messages."
         )
-        line_bot_api.reply_message(reply_token, group_reply)
+        try:
+            line_bot_api.reply_message(reply_token, group_reply)
+        except Exception as e:
+            print(f"Error using reply token for auth request: {e}")
+            # Don't attempt push message here as we don't have group_id
 
 
 
@@ -962,10 +966,24 @@ def handle_image(event):
                 group_reply = TextSendMessage(
                     text=f"✅ Image saved to {len(successful_uploads)} Google Drive(s)!"
                 )
-                line_bot_api.reply_message(event.reply_token, group_reply)
+                try:
+                    line_bot_api.reply_message(event.reply_token, group_reply)
+                except Exception as e:
+                    print(f"Error using reply token (likely expired/used): {e}")
+                    # Fallback: send as push message to the group
+                    try:
+                        group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+                        line_bot_api.push_message(group_id, group_reply)
+                    except Exception as push_error:
+                        print(f"Error sending push message to group: {push_error}")
             else:
                 # In private chat, just reply normally
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ Image saved to your Google Drive!"))
+                try:
+                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ Image saved to your Google Drive!"))
+                except Exception as e:
+                    print(f"Error using reply token in private chat: {e}")
+                    # Fallback: send as push message
+                    line_bot_api.push_message(user_id, TextSendMessage(text="✅ Image saved to your Google Drive!"))
         
         # Handle failed uploads
         if failed_uploads:
@@ -986,9 +1004,21 @@ def handle_image(event):
         # Send brief error in group/room (if applicable)
         if source_type == 'group' or source_type == 'room':
             group_reply = TextSendMessage(text="❌ Error processing image")
-            line_bot_api.reply_message(event.reply_token, group_reply)
+            try:
+                line_bot_api.reply_message(event.reply_token, group_reply)
+            except Exception as reply_error:
+                print(f"Error using reply token for error message: {reply_error}")
+                try:
+                    group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+                    line_bot_api.push_message(group_id, group_reply)
+                except Exception as push_error:
+                    print(f"Error sending push message to group: {push_error}")
         else:
-            line_bot_api.reply_message(event.reply_token, error_message)
+            try:
+                line_bot_api.reply_message(event.reply_token, error_message)
+            except Exception as reply_error:
+                print(f"Error using reply token for error message: {reply_error}")
+                line_bot_api.push_message(user_id, error_message)
 
 @handler.add(MessageEvent, message=FileMessage)
 def handle_file(event):
@@ -1086,10 +1116,24 @@ def handle_file(event):
                 group_reply = TextSendMessage(
                     text=f"✅ File saved to {len(successful_uploads)} Google Drive(s)!"
                 )
-                line_bot_api.reply_message(event.reply_token, group_reply)
+                try:
+                    line_bot_api.reply_message(event.reply_token, group_reply)
+                except Exception as e:
+                    print(f"Error using reply token (likely expired/used): {e}")
+                    # Fallback: send as push message to the group
+                    try:
+                        group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+                        line_bot_api.push_message(group_id, group_reply)
+                    except Exception as push_error:
+                        print(f"Error sending push message to group: {push_error}")
             else:
                 # In private chat, just reply normally
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ File saved to your Google Drive!"))
+                try:
+                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ File saved to your Google Drive!"))
+                except Exception as e:
+                    print(f"Error using reply token in private chat: {e}")
+                    # Fallback: send as push message
+                    line_bot_api.push_message(user_id, TextSendMessage(text="✅ File saved to your Google Drive!"))
         
         # Handle failed uploads
         if failed_uploads:
@@ -1110,9 +1154,21 @@ def handle_file(event):
         # Send brief error in group/room (if applicable)
         if source_type == 'group' or source_type == 'room':
             group_reply = TextSendMessage(text="❌ Error processing file")
-            line_bot_api.reply_message(event.reply_token, group_reply)
+            try:
+                line_bot_api.reply_message(event.reply_token, group_reply)
+            except Exception as reply_error:
+                print(f"Error using reply token for error message: {reply_error}")
+                try:
+                    group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+                    line_bot_api.push_message(group_id, group_reply)
+                except Exception as push_error:
+                    print(f"Error sending push message to group: {push_error}")
         else:
-            line_bot_api.reply_message(event.reply_token, error_message)
+            try:
+                line_bot_api.reply_message(event.reply_token, error_message)
+            except Exception as reply_error:
+                print(f"Error using reply token for error message: {reply_error}")
+                line_bot_api.push_message(user_id, error_message)
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
@@ -1142,9 +1198,21 @@ def handle_text_message(event):
             if source_type == 'group' or source_type == 'room':
                 line_bot_api.push_message(user_id, status_message)
                 group_reply = TextSendMessage(text="📊 Status sent to you privately.")
-                line_bot_api.reply_message(event.reply_token, group_reply)
+                try:
+                    line_bot_api.reply_message(event.reply_token, group_reply)
+                except Exception as e:
+                    print(f"Error using reply token for status: {e}")
+                    try:
+                        group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+                        line_bot_api.push_message(group_id, group_reply)
+                    except Exception as push_error:
+                        print(f"Error sending push message to group: {push_error}")
             else:
-                line_bot_api.reply_message(event.reply_token, status_message)
+                try:
+                    line_bot_api.reply_message(event.reply_token, status_message)
+                except Exception as e:
+                    print(f"Error using reply token for status: {e}")
+                    line_bot_api.push_message(user_id, status_message)
                 
         elif text in ['/help', 'help', '/commands', 'commands']:
             help_message = TextSendMessage(
@@ -1161,9 +1229,21 @@ def handle_text_message(event):
             if source_type == 'group' or source_type == 'room':
                 line_bot_api.push_message(user_id, help_message)
                 group_reply = TextSendMessage(text="📖 Help sent to you privately.")
-                line_bot_api.reply_message(event.reply_token, group_reply)
+                try:
+                    line_bot_api.reply_message(event.reply_token, group_reply)
+                except Exception as e:
+                    print(f"Error using reply token for help: {e}")
+                    try:
+                        group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+                        line_bot_api.push_message(group_id, group_reply)
+                    except Exception as push_error:
+                        print(f"Error sending push message to group: {push_error}")
             else:
-                line_bot_api.reply_message(event.reply_token, help_message)
+                try:
+                    line_bot_api.reply_message(event.reply_token, help_message)
+                except Exception as e:
+                    print(f"Error using reply token for help: {e}")
+                    line_bot_api.push_message(user_id, help_message)
                 
         # Don't respond to other text messages to avoid spam
         
@@ -1184,8 +1264,32 @@ def debug_user_auth(user_id):
     <p><strong>Current Time:</strong> {datetime.now()}</p>
     """
 
-if __name__ == "__main__":
-    # Get port from environment variable (Render sets this automatically)
-    port = int(os.environ.get("PORT", 5000))
-    # Bind to 0.0.0.0 to accept external connections
-    app.run(host="0.0.0.0", port=port, debug=False)
+def safe_reply_message(event, message, fallback_user_id=None):
+    """
+    Safely send a reply message with fallback to push message if reply token fails.
+    
+    Args:
+        event: LINE event object
+        message: TextSendMessage object to send
+        fallback_user_id: User ID to send push message to if reply fails (optional)
+    """
+    try:
+        line_bot_api.reply_message(event.reply_token, message)
+    except Exception as e:
+        print(f"Reply token failed: {e}")
+        
+        # If in group/room and no fallback_user_id specified, try to send to group
+        source_type = event.source.type
+        if source_type in ['group', 'room'] and not fallback_user_id:
+            try:
+                group_id = event.source.group_id if source_type == 'group' else event.source.room_id
+                line_bot_api.push_message(group_id, message)
+            except Exception as push_error:
+                print(f"Push message to group also failed: {push_error}")
+        
+        # If fallback_user_id provided, send to that user
+        elif fallback_user_id:
+            try:
+                line_bot_api.push_message(fallback_user_id, message)
+            except Exception as push_error:
+                print(f"Push message to user {fallback_user_id} failed: {push_error}")
