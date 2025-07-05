@@ -894,10 +894,19 @@ def handle_image(event):
         target_users = get_authenticated_users_in_context(event)
         print(f"Target users: {target_users}")
         
-        # If no one is authenticated, send auth request to sender
-        if not target_users:
-            print(f"No target users found, sending auth request to {user_id}")
+        # Check if the sender is authenticated
+        sender_authenticated = is_user_authenticated(user_id)
+        print(f"Sender authenticated: {sender_authenticated}")
+        
+        # If sender is not authenticated, send auth request
+        if not sender_authenticated:
+            print(f"Sender {user_id} not authenticated, sending auth request")
             send_auth_request(user_id, event.reply_token, source_type)
+            # Continue to check if there are other authenticated users to save for
+        
+        # If no authenticated users found (including sender), return
+        if not target_users:
+            print(f"No authenticated users found in group, stopping here")
             return
         
         content = line_bot_api.get_message_content(message_id)
@@ -991,10 +1000,21 @@ def handle_file(event):
         
         # Get all authenticated users who should receive this file
         target_users = get_authenticated_users_in_context(event)
+        print(f"Target users: {target_users}")
         
-        # If no one is authenticated, send auth request to sender
-        if not target_users:
+        # Check if the sender is authenticated
+        sender_authenticated = is_user_authenticated(user_id)
+        print(f"Sender authenticated: {sender_authenticated}")
+        
+        # If sender is not authenticated, send auth request
+        if not sender_authenticated:
+            print(f"Sender {user_id} not authenticated, sending auth request")
             send_auth_request(user_id, event.reply_token, source_type)
+            # Continue to check if there are other authenticated users to save for
+        
+        # If no authenticated users found (including sender), return
+        if not target_users:
+            print(f"No authenticated users found in group, stopping here")
             return
         
         content = line_bot_api.get_message_content(message_id)
